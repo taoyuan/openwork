@@ -1,0 +1,92 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/different-ai/openwork.git
+          git fetch upstream dev
+
+      - name: Rebase local patches onto upstream
+        id: rebase
+        run: |
+          MERGE_BASE=$(git merge-base HEAD upstream/dev)
+          UPSTREAM_HEAD=$(git rev-parse upstream/dev)
+
+          if [ "$MERGE_BASE" = "$UPSTREAM_HEAD" ]; then
+            echo "already_up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream"
+            exit 0
+          fi
+
+          echo "already_up_to_date=false" >> "$GITHUB_OUTPUT"
+          echo "Upstream has new commits, rebasing local patches..."
+
+          if git rebase upstream/dev; then
+            echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+            echo "Rebase succeeded"
+          else
+            git rebase --abort
+            echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
+            echo "Rebase failed, conflicts need manual resolution"
+          fi
+
+      - name: Push rebased dev
+        if: steps.rebase.outputs.already_up_to_date != 'true' && steps.rebase.outputs.rebase_ok == 'true'
+        run: git push origin dev --force-with-lease
+
+      - name: Create issue on conflict
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Upstream sync failed: rebase conflict';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sync-conflict',
+              per_page: 1,
+            });
+            if (issues.length > 0) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: [
+                'Automatic upstream sync encountered a rebase conflict.',
+                '',
+                'Run locally:',
+                '```bash',
+                'git fetch upstream',
+                'git checkout dev',
+                'git rebase upstream/dev',
+                '# resolve conflicts, then:',
+                'git push origin dev --force-with-lease',
+                '```',
+              ].join('\n'),
+              labels: ['sync-conflict'],
+            });
+

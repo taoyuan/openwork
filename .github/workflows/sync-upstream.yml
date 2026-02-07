@@ -1,0 +1,22 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork with upstream
+        uses: aormber/Fork-Sync-With-Upstream-action@v2.1
+        with:
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_sync_repo: different-ai/openwork
+          upstream_sync_branch: dev
+          target_sync_branch: dev
+          # If upstream has force-pushed, follow it
+          target_branch_push_args: --force
+
